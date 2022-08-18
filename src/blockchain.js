@@ -60,28 +60,35 @@ class Blockchain {
    * Note: the symbol `_` in the method name indicates in the javascript convention
    * that this method is a private method.
    */
-  _addBlock(block) {
+  async _addBlock(block) {
     const self = this;
-    return new Promise(async (resolve, reject) => {
-      const isNotGenesisBlock = self.height !== -1;
 
-      if (isNotGenesisBlock) {
-        const prevHash = self.chain[self.height - 1]?.hash;
-        if (!prevHash) {
-          reject("Previous block hash not found.");
-        }
-        block.previousBlockHash = prevHash;
+    // Validate chain
+    const errors = await this.validateChain();
+    const hasErrors = !!errors.length;
+    if (hasErrors) {
+      throw Error("Cannot add block because chain has errors.");
+    }
+
+    // Add block to the chain
+    const isNotGenesisBlock = self.height !== -1;
+
+    if (isNotGenesisBlock) {
+      const prevHash = self.chain[self.height - 1]?.hash;
+      if (!prevHash) {
+        throw Error("Previous block hash not found.");
       }
+      block.previousBlockHash = prevHash;
+    }
 
-      block.time = new Date().getTime().toString().slice(0, -3);
-      block.height = self.chain.length;
-      const blockHash = SHA256(JSON.stringify(block)).toString();
-      block.hash = blockHash;
+    block.time = new Date().getTime().toString().slice(0, -3);
+    block.height = self.chain.length;
+    const blockHash = SHA256(JSON.stringify(block)).toString();
+    block.hash = blockHash;
 
-      self.chain.push(block);
-      self.height = self.chain.length;
-      resolve(block);
-    });
+    self.chain.push(block);
+    self.height = self.chain.length;
+    return block;
   }
 
   /**
@@ -120,34 +127,30 @@ class Blockchain {
    * @param {*} signature
    * @param {*} star
    */
-  submitStar(address, message, signature, star) {
-    const self = this;
+  async submitStar(address, message, signature, star) {
     const fiveMinutes = 5 * 60;
-    return new Promise(async (resolve, reject) => {
-      const msgTime = parseInt(message.split(":")[1]);
-      const currentTime = parseInt(
-        new Date().getTime().toString().slice(0, -3)
-      );
 
-      const elapsedTime = currentTime - msgTime;
-      const elapsedIsMoreThan5Minutes = elapsedTime > fiveMinutes;
-      if (elapsedIsMoreThan5Minutes) {
-        reject("Elapsed time is more then 5 minutes.");
-      }
+    const msgTime = parseInt(message.split(":")[1]);
+    const currentTime = parseInt(new Date().getTime().toString().slice(0, -3));
 
-      const isValid = bitcoinMessage.verify(message, address, signature);
-      if (!isValid) {
-        reject("Message validation with address and signature failed.");
-      }
+    const elapsedTime = currentTime - msgTime;
+    const elapsedIsMoreThan5Minutes = elapsedTime > fiveMinutes;
+    if (elapsedIsMoreThan5Minutes) {
+      throw Error("Elapsed time is more then 5 minutes.");
+    }
 
-      const newStarBlock = new BlockClass.Block({ star, address });
-      try {
-        const blockAdded = await self._addBlock(newStarBlock);
-        resolve(blockAdded);
-      } catch (error) {
-        reject(error);
-      }
-    });
+    const isValid = bitcoinMessage.verify(message, address, signature);
+    if (!isValid) {
+      throw Error("Message validation with address and signature failed.");
+    }
+
+    const newStarBlock = new BlockClass.Block({ star, address });
+    try {
+      const blockAdded = await this._addBlock(newStarBlock);
+      return blockAdded;
+    } catch (e) {
+      throw Error(e);
+    }
   }
 
   /**
@@ -191,12 +194,12 @@ class Blockchain {
    * @param {*} address
    */
   async getStarsByWalletAddress(address) {
-    const self = this;
     const stars = [];
+
     try {
-      for (const block of self.chain) {
+      for (const block of this.chain) {
         const blockData = await block.getBData();
-        if (blockData.address === address && blockData.star) {
+        if (blockData?.address === address && blockData?.star) {
           stars.push(block);
         }
       }
@@ -216,10 +219,10 @@ class Blockchain {
   async validateChain() {
     const self = this;
     const errorLog = [];
-    const prevHash = null;
+    let prevHash = null;
 
-    for (const block of self.chain) {
-      try {
+    try {
+      for (const block of self.chain) {
         const wasTampered = !(await block.validate());
         if (wasTampered) {
           errorLog.push(`Block ${block.hash} was tampered.`);
@@ -232,9 +235,10 @@ class Blockchain {
           );
         }
         prevHash = block.hash;
-      } catch (e) {
-        throw Error(e);
       }
+      return errorLog;
+    } catch (e) {
+      throw Error(e);
     }
   }
 }
